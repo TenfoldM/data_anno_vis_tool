@@ -111,22 +111,42 @@ def load_session_state():
 # 3. 侧边栏布局 (Sidebar)
 # ==========================================
 with st.sidebar:
-    st.header("📂 数据导入")
+    st.header("📂 数据导入与会话管理")
 
-    # 会话管理按钮
-    col_session1, col_session2 = st.columns(2)
-    with col_session1:
-        if st.button("📂 加载会话", help="从本地文件加载上次保存的工作状态"):
-            if load_session_state():
+    # 会话管理
+    with st.expander("💾 会话管理", expanded=False):
+        st.markdown("**保存会话到本地文件：**")
+        # 生成会话JSON数据
+        if st.session_state.data_loaded:
+            session_data = {
+                'data': st.session_state.data,
+                'data_loaded': st.session_state.data_loaded,
+                'filter_state': st.session_state.filter_state
+            }
+            session_json = json.dumps(session_data, ensure_ascii=False, indent=2)
+            st.download_button(
+                label="📥 下载会话文件",
+                data=session_json,
+                file_name="data_anno_session.json",
+                mime="application/json",
+                help="下载会话文件到本地电脑"
+            )
+        else:
+            st.info("请先加载数据后再保存会话")
+
+        st.divider()
+        st.markdown("**从本地文件加载会话：**")
+        session_upload = st.file_uploader("上传会话文件", type=['json'], key="session_uploader")
+        if session_upload is not None:
+            try:
+                session_data = json.load(session_upload)
+                st.session_state.data = session_data.get('data', [])
+                st.session_state.data_loaded = session_data.get('data_loaded', False)
+                st.session_state.filter_state = session_data.get('filter_state', {})
                 st.success("会话加载成功！")
                 st.rerun()
-            else:
-                st.warning("没有找到保存的会话文件")
-    with col_session2:
-        if st.button("💾 保存会话", help="保存当前工作状态到本地文件"):
-            # 这里先保存一个空的filter_state，后面会更新
-            if save_session_state(st.session_state.filter_state):
-                st.success("会话保存成功！")
+            except Exception as e:
+                st.error(f"加载会话失败: {e}")
 
     st.divider()
 
