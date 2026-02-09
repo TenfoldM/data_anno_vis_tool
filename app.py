@@ -2,23 +2,17 @@ import streamlit as st
 import pandas as pd
 import json
 import io
-import datetime
 
 # ==========================================
-# 1. 页面配置与初始化
+# 1. 页面配置与状态初始化
 # ==========================================
-st.set_page_config(layout="wide", page_title="标注与可视化工具")
+st.set_page_config(layout="wide", page_title="数据标注工具")
 
-# 初始化 session_state
+# 初始化 session_state 用于存储数据
 if 'data' not in st.session_state:
     st.session_state.data = []
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
-if 'original_filename' not in st.session_state:
-    st.session_state.original_filename = "data"
-# 初始化页码状态
-if "current_page" not in st.session_state:
-    st.session_state.current_page = 1
 
 # ==========================================
 # 2. 核心功能函数
@@ -27,34 +21,36 @@ def load_data(uploaded_file):
     """读取上传的JSONL文件并存入session_state"""
     if uploaded_file is not None:
         try:
-            # 记录原始文件名（去掉扩展名）
-            st.session_state.original_filename = uploaded_file.name.rsplit('.', 1)[0]
-            
             # 读取文件内容
             stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
             data_list = []
             for line in stringio:
                 if line.strip():
                     item = json.loads(line)
-                    # 确保每个item都有label字段
+                    # 确保每个item都有label字段，如果没有则默认为 'unlabeled'
                     if 'label' not in item or not item['label']:
                         item['label'] = 'unlabeled'
+
+                    # 兼容新旧数据结构：统一使用urls字段
+                    if 'image_url' in item and 'urls' not in item:
+                        item['urls'] = [item['image_url']]
+
                     data_list.append(item)
-            
+
             st.session_state.data = data_list
             st.session_state.data_loaded = True
-            # 重置页码为1
-            st.session_state.current_page = 1
+            st.success(f"成功加载 {len(data_list)} 条数据！")
         except Exception as e:
             st.error(f"文件读取失败: {e}")
 
 def update_label(index, new_label):
     """更新指定索引数据的标签"""
     st.session_state.data[index]['label'] = new_label
-    # Streamlit 会自动重运行以刷新界面
+    # 强制重新运行以刷新界面状态
+    st.rerun()
 
-def convert_to_jsonl(data):
-    """将数据转换为JSONL格式字符串"""
+def convert_df_to_jsonl(data):
+    """将数据转换为JSONL格式用于下载"""
     jsonl_str = ""
     for item in data:
         jsonl_str += json.dumps(item, ensure_ascii=False) + "\n"
@@ -70,157 +66,184 @@ with st.sidebar:
     if uploaded_file and not st.session_state.data_loaded:
         load_data(uploaded_file)
     
+    # 仅当数据加载后显示筛选器
     if st.session_state.data_loaded:
         st.divider()
-        st.header("🔍 筛选与控制")
-        
+        st.header("🔍 筛选条件")
+
         # 1. 标注状态筛选
         status_options = ["All", "unlabeled", "pos", "neg", "disable"]
-        selected_status = st.selectbox("筛选标注状态", status_options)
-        
-        # 2. 搜索类型筛选
-        all_search_types = list(set([str(item.get('search_type', 'Unknown')) for item in st.session_state.data]))
-        selected_search_type = st.multiselect("筛选 Search Type", all_search_types, default=all_search_types)
-        
-        # 3. 每页数量设置
-        items_per_page = st.slider("每页显示条数", 5, 50, 10)
+        selected_status = st.selectbox("标注状态 (Label Status)", status_options)
+
+        # 2. 搜索类型筛选 (根据数据动态获取)
+        all_search_types = list(set([item.get('search_type', 'Unknown') for item in st.session_state.data]))
+        selected_search_type = st.multiselect("Search Type", all_search_types, default=all_search_types)
+
+        # 3. Violation Type 筛选
+        all_violation_types = list(set([
+            item.get('gemini_model_result', {}).get('violation_type', 'None')
+            for item in st.session_state.data
+        ]))
+        # 移除空值并排序
+        all_violation_types = sorted([vt for vt in all_violation_types if vt and vt != 'None'])
+        all_violation_types = ["All"] + all_violation_types
+        selected_violation_type = st.selectbox("Violation Type", all_violation_types)
+
+        # 4. ID 范围筛选
+        total_count = len(st.session_state.data)
+        if total_count > 0:
+            id_range = st.slider("Item ID 范围", 1, total_count, (1, total_count))
+        else:
+            id_range = (0, 0)
+
+        # 5. 每页显示数量
+        items_per_page = st.slider("每页条数", 5, 50, 10)
         
         st.divider()
         st.header("💾 结果导出")
-        
-        # 动态文件名生成
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        export_filename = f"{st.session_state.original_filename}_{timestamp}_labeled_data.jsonl"
-        
-        jsonl_output = convert_to_jsonl(st.session_state.data)
-        st.download_button(
-            label="📥 下载标注结果 (JSONL)",
-            data=jsonl_output,
-            file_name=export_filename,
-            mime="application/json",
-            help="导出当前所有数据（包含最新标注状态）"
-        )
+        # 导出按钮
+        if st.session_state.data_loaded:
+            jsonl_data = convert_df_to_jsonl(st.session_state.data)
+            st.download_button(
+                label="📥 下载标注结果 (JSONL)",
+                data=jsonl_data,
+                file_name="labeled_data.jsonl",
+                mime="application/json"
+            )
 
 # ==========================================
 # 4. 主界面布局 (Main Area)
 # ==========================================
-st.title("🛡️ 成人用品数据审核工具")
+st.title("🔍 数据标注工具")
 
 if not st.session_state.data_loaded:
-    st.info("👈 请在左侧上传数据文件开始工作")
+    st.info("👈 请在左侧上传 JSONL 文件开始工作")
 else:
     # --- 数据过滤逻辑 ---
-    filtered_indices = []
+    filtered_data = []
+    # 这里为了保留原始索引方便修改，我们存储 (index, item) 元组
     for idx, item in enumerate(st.session_state.data):
         # 状态过滤
         if selected_status != "All" and item['label'] != selected_status:
             continue
         # Search Type 过滤
-        if str(item.get('search_type')) not in selected_search_type:
+        if item.get('search_type') not in selected_search_type:
             continue
-        filtered_indices.append(idx)
+        # Violation Type 过滤
+        if selected_violation_type != "All":
+            item_violation_type = item.get('gemini_model_result', {}).get('violation_type', 'None')
+            if item_violation_type != selected_violation_type:
+                continue
+        # ID 范围过滤 (假设数据按顺序排列，或者简单使用 enumerate 的 index+1 作为 ID)
+        current_id = idx + 1 # 或者使用 item['item_id'] 如果它是连续整数
+        if not (id_range[0] <= current_id <= id_range[1]):
+            continue
+
+        filtered_data.append((idx, item))
 
     # --- 统计面板 ---
-    total = len(st.session_state.data)
-    pos = sum(1 for item in st.session_state.data if item['label'] == 'pos')
-    neg = sum(1 for item in st.session_state.data if item['label'] == 'neg')
-    unlabeled = sum(1 for item in st.session_state.data if item['label'] == 'unlabeled')
+    total_samples = len(st.session_state.data)
+    pos_count = sum(1 for item in st.session_state.data if item['label'] == 'pos')
+    neg_count = sum(1 for item in st.session_state.data if item['label'] == 'neg')
+    disable_count = sum(1 for item in st.session_state.data if item['label'] == 'disable')
     
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("总样本", total)
-    m2.metric("✅ POS", pos)
-    m3.metric("❌ NEG", neg)
-    m4.metric("⏳ 待标注", unlabeled)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("总样本", total_samples)
+    col2.metric("✅ Pos", pos_count)
+    col3.metric("❌ Neg", neg_count)
+    col4.metric("🚫 Disable", disable_count)
     
     st.divider()
 
-    # --- 列表渲染与分页逻辑 ---
-    if not filtered_indices:
-        st.warning("没有匹配当前筛选条件的数据。")
+    # --- 分页逻辑 ---
+    if len(filtered_data) == 0:
+        st.warning("没有符合筛选条件的数据。")
     else:
-        num_filtered = len(filtered_indices)
-        total_pages = (num_filtered - 1) // items_per_page + 1
+        # 计算页码
+        total_pages = (len(filtered_data) - 1) // items_per_page + 1
         
-        # 边界检查：确保当前页码有效
-        if st.session_state.current_page > total_pages:
-            st.session_state.current_page = total_pages
-        if st.session_state.current_page < 1:
-            st.session_state.current_page = 1
+        # 在侧边栏增加页码选择，或者在底部
+        with st.sidebar:
+            current_page = st.number_input("页码", min_value=1, max_value=total_pages, value=1)
+        
+        start_idx = (current_page - 1) * items_per_page
+        end_idx = min(start_idx + items_per_page, len(filtered_data))
+        
+        current_batch = filtered_data[start_idx:end_idx]
 
-        # [Top Pagination] 顶部页码输入框
-        col_top_1, col_top_2 = st.columns([1, 6])
-        with col_top_1:
-            # 直接绑定到 session_state.current_page
-            st.number_input(
-                "跳转页码", 
-                min_value=1, 
-                max_value=total_pages, 
-                key="current_page" 
-            )
-        
-        # 计算当前页数据的起止索引
-        start_ptr = (st.session_state.current_page - 1) * items_per_page
-        end_ptr = min(start_ptr + items_per_page, num_filtered)
-        
-        # 渲染当前页的数据卡片
-        for i in range(start_ptr, end_ptr):
-            real_idx = filtered_indices[i]
-            item = st.session_state.data[real_idx]
-            
-            with st.container(border=True):
-                col_img, col_info, col_btn = st.columns([1, 2, 1])
-                
-                # 1. 图片展示
-                with col_img:
-                    url = item['urls'][0] if item.get('urls') else ""
-                    if url:
-                        st.image(url, use_container_width=True)
-                    else:
-                        st.text("无图片")
-                
-                # 2. 信息展示
-                with col_info:
-                    st.markdown(f"**Item ID:** `{item.get('item_id', 'N/A')}`")
-                    st.markdown(f"**Query:** `{item.get('query', 'N/A')}`")
-                    # 使用 text_area 显示标题，避免过长
-                    st.text_area("Title", value=item.get('title', ''), height=70, disabled=True, key=f"title_{real_idx}")
-                    
-                    # 状态展示
-                    label_colors = {"pos": "green", "neg": "red", "disable": "gray", "unlabeled": "blue"}
-                    current_lbl = item['label']
-                    st.markdown(f"当前状态: :{label_colors.get(current_lbl, 'blue')}[**{current_lbl.upper()}**]")
+        # --- 列表渲染 ---
+        for real_index, item in current_batch:
+            with st.container():
+                # 每一行分两列：左边图+信息，右边按钮组
+                c1, c2 = st.columns([3, 1])
 
-                # 3. 操作按钮
-                with col_btn:
-                    st.write("更新标注:")
-                    if st.button("✅ Pos", key=f"p_{real_idx}", use_container_width=True):
-                        update_label(real_idx, "pos")
-                    if st.button("❌ Neg", key=f"n_{real_idx}", use_container_width=True):
-                        update_label(real_idx, "neg")
-                    if st.button("🚫 Disable", key=f"d_{real_idx}", use_container_width=True):
-                        update_label(real_idx, "disable")
+                with c1:
+                    # 显示图片和元数据
+                    sub_c1, sub_c2 = st.columns([1, 2])
+                    with sub_c1:
+                        # 获取图片URL，优先使用image_url，失败时使用image_thumbnail
+                        img_url = None
+                        img_thumbnail = None
 
-        # --- [Bottom Pagination] 底部翻页按钮 ---
-        st.divider()
-        
-        # 回调函数：处理按钮点击
-        def prev_page():
-            st.session_state.current_page -= 1
-        def next_page():
-            st.session_state.current_page += 1
+                        if item.get('urls'):
+                            img_url = item['urls'][0]
+                        elif item.get('image_url'):
+                            img_url = item['image_url']
 
-        b_col1, b_col2, b_col3 = st.columns([1, 8, 1])
-        
-        # 上一页按钮
-        with b_col1:
-            if st.session_state.current_page > 1:
-                st.button("⬅️ 上一页", on_click=prev_page, use_container_width=True)
-        
-        # 进度文本
-        with b_col2:
-            st.markdown(f"<center style='line-height: 2.5;'>第 {st.session_state.current_page} / {total_pages} 页</center>", unsafe_allow_html=True)
-            
-        # 下一页按钮
-        with b_col3:
-            if st.session_state.current_page < total_pages:
-                st.button("下一页 ➡️", on_click=next_page, use_container_width=True)
+                        if item.get('image_thumbnail'):
+                            img_thumbnail = item['image_thumbnail']
+
+                        # 尝试显示主图片，失败时显示缩略图
+                        image_displayed = False
+                        if img_url:
+                            try:
+                                st.image(img_url, width=150)
+                                image_displayed = True
+                            except:
+                                pass
+
+                        if not image_displayed and img_thumbnail:
+                            try:
+                                st.image(img_thumbnail, width=150)
+                                image_displayed = True
+                            except:
+                                pass
+
+                        if not image_displayed:
+                            st.text("No Image")
+
+                    with sub_c2:
+                        st.markdown(f"**Item ID:** {item.get('item_id', 'N/A')}")
+                        st.markdown(f"**Search Type:** `{item.get('search_type', '-')}`")
+                        st.markdown(f"**Query:** `{item.get('query', '-')}`")
+                        st.markdown(f"**Title:** {item.get('title', '-')}")
+
+                        # 显示Gemini模型结果
+                        gemini_result = item.get('gemini_model_result', {})
+                        if gemini_result:
+                            if gemini_result.get('violation_type'):
+                                st.markdown(f"**Violation Type:** :orange[{gemini_result.get('violation_type')}]")
+                            if gemini_result.get('reason'):
+                                with st.expander("🤖 Gemini Reason"):
+                                    st.markdown(gemini_result.get('reason'))
+
+                        # 显示当前状态的徽章
+                        status_color = {
+                            "pos": "green", "neg": "red", "disable": "gray", "unlabeled": "blue"
+                        }
+                        color = status_color.get(item['label'], "blue")
+                        st.markdown(f"当前状态: :{color}[**{item['label'].upper()}**]")
+
+                with c2:
+                    st.write("标注操作:")
+                    # 使用唯一 key 避免冲突
+                    if st.button("✅ Pos", key=f"btn_pos_{real_index}"):
+                        update_label(real_index, "pos")
+
+                    if st.button("❌ Neg", key=f"btn_neg_{real_index}"):
+                        update_label(real_index, "neg")
+
+                    if st.button("🚫 Disable", key=f"btn_dis_{real_index}"):
+                        update_label(real_index, "disable")
+
+                st.divider()
