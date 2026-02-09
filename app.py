@@ -49,6 +49,22 @@ def update_label(index, new_label):
     # 强制重新运行以刷新界面状态
     st.rerun()
 
+def update_gemini_reason(index, new_reason):
+    """更新指定索引数据的Gemini Reason"""
+    if 'gemini_model_result' not in st.session_state.data[index]:
+        st.session_state.data[index]['gemini_model_result'] = {}
+    st.session_state.data[index]['gemini_model_result']['reason'] = new_reason
+    # 强制重新运行以刷新界面状态
+    st.rerun()
+
+def update_gemini_violation_type(index, new_violation_type):
+    """更新指定索引数据的Gemini Violation Type"""
+    if 'gemini_model_result' not in st.session_state.data[index]:
+        st.session_state.data[index]['gemini_model_result'] = {}
+    st.session_state.data[index]['gemini_model_result']['violation_type'] = new_violation_type
+    # 强制重新运行以刷新界面状态
+    st.rerun()
+
 def convert_df_to_jsonl(data):
     """将数据转换为JSONL格式用于下载"""
     jsonl_str = ""
@@ -161,9 +177,10 @@ else:
     else:
         # 计算页码
         total_pages = (len(filtered_data) - 1) // items_per_page + 1
-        
+
         # 在侧边栏增加页码选择，或者在底部
         with st.sidebar:
+            st.markdown(f"**筛选结果:** {len(filtered_data)} 条数据，共 {total_pages} 页")
             current_page = st.number_input("页码", min_value=1, max_value=total_pages, value=1)
         
         start_idx = (current_page - 1) * items_per_page
@@ -222,10 +239,32 @@ else:
                         gemini_result = item.get('gemini_model_result', {})
                         if gemini_result:
                             if gemini_result.get('violation_type'):
-                                st.markdown(f"**Violation Type:** :orange[{gemini_result.get('violation_type')}]")
+                                current_violation_type = gemini_result.get('violation_type', '')
+                                col_vt1, col_vt2 = st.columns([3, 1])
+                                with col_vt1:
+                                    edited_violation_type = st.text_input(
+                                        "Violation Type",
+                                        value=current_violation_type,
+                                        key=f"vtype_edit_{real_index}"
+                                    )
+                                with col_vt2:
+                                    st.write("")  # 占位，对齐按钮
+                                    if st.button("💾", key=f"btn_save_vtype_{real_index}", help="保存Violation Type修改"):
+                                        if edited_violation_type != current_violation_type:
+                                            update_gemini_violation_type(real_index, edited_violation_type)
                             if gemini_result.get('reason'):
-                                with st.expander("🤖 Gemini Reason"):
-                                    st.markdown(gemini_result.get('reason'))
+                                with st.expander("🤖 Gemini Reason (可编辑)", expanded=False):
+                                    current_reason = gemini_result.get('reason', '')
+                                    edited_reason = st.text_area(
+                                        "编辑原因:",
+                                        value=current_reason,
+                                        height=150,
+                                        key=f"reason_edit_{real_index}"
+                                    )
+                                    if st.button("💾 保存修改", key=f"btn_save_reason_{real_index}"):
+                                        if edited_reason != current_reason:
+                                            update_gemini_reason(real_index, edited_reason)
+                                            st.success("已保存修改！")
 
                         # 显示当前状态的徽章
                         status_color = {
