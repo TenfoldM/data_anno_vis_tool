@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import io
+import os
 
 # ==========================================
 # 1. 页面配置与状态初始化
@@ -13,6 +14,10 @@ if 'data' not in st.session_state:
     st.session_state.data = []
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
+if 'session_file' not in st.session_state:
+    st.session_state.session_file = '.data_anno_session.json'
+if 'filter_state' not in st.session_state:
+    st.session_state.filter_state = {}
 
 # ==========================================
 # 2. 核心功能函数
@@ -72,13 +77,61 @@ def convert_df_to_jsonl(data):
         jsonl_str += json.dumps(item, ensure_ascii=False) + "\n"
     return jsonl_str
 
+def save_session_state(filter_state):
+    """保存会话状态到本地文件"""
+    try:
+        session_data = {
+            'data': st.session_state.data,
+            'data_loaded': st.session_state.data_loaded,
+            'filter_state': filter_state
+        }
+        with open(st.session_state.session_file, 'w', encoding='utf-8') as f:
+            json.dump(session_data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"保存会话失败: {e}")
+        return False
+
+def load_session_state():
+    """从本地文件加载会话状态"""
+    try:
+        if os.path.exists(st.session_state.session_file):
+            with open(st.session_state.session_file, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
+            st.session_state.data = session_data.get('data', [])
+            st.session_state.data_loaded = session_data.get('data_loaded', False)
+            st.session_state.filter_state = session_data.get('filter_state', {})
+            return True
+        return False
+    except Exception as e:
+        st.error(f"加载会话失败: {e}")
+        return False
+
 # ==========================================
 # 3. 侧边栏布局 (Sidebar)
 # ==========================================
 with st.sidebar:
     st.header("📂 数据导入")
+
+    # 会话管理按钮
+    col_session1, col_session2 = st.columns(2)
+    with col_session1:
+        if st.button("📂 加载会话", help="从本地文件加载上次保存的工作状态"):
+            if load_session_state():
+                st.success("会话加载成功！")
+                st.rerun()
+            else:
+                st.warning("没有找到保存的会话文件")
+    with col_session2:
+        if st.button("💾 保存会话", help="保存当前工作状态到本地文件"):
+            # 这里先保存一个空的filter_state，后面会更新
+            if save_session_state(st.session_state.filter_state):
+                st.success("会话保存成功！")
+
+    st.divider()
+
     uploaded_file = st.file_uploader("上传 JSONL 文件", type=['jsonl', 'json'])
-    
+
     if uploaded_file and not st.session_state.data_loaded:
         load_data(uploaded_file)
     
@@ -87,13 +140,22 @@ with st.sidebar:
         st.divider()
         st.header("🔍 筛选条件")
 
+        # 从保存的filter_state中获取默认值
+        saved_filter = st.session_state.filter_state
+
         # 1. 标注状态筛选
         status_options = ["All", "unlabeled", "pos", "neg", "disable"]
-        selected_status = st.selectbox("标注状态 (Label Status)", status_options)
+        default_status_index = status_options.index(saved_filter.get('selected_status', 'All')) if saved_filter.get('selected_status') in status_options else 0
+        selected_status = st.selectbox("标注状态 (Label Status)", status_options, index=default_status_index)
 
         # 2. 搜索类型筛选 (根据数据动态获取)
         all_search_types = list(set([item.get('search_type', 'Unknown') for item in st.session_state.data]))
-        selected_search_type = st.multiselect("Search Type", all_search_types, default=all_search_types)
+        default_search_types = saved_filter.get('selected_search_type', all_search_types)
+        # 确保default_search_types中的所有项都在all_search_types中
+        default_search_types = [st for st in default_search_types if st in all_search_types]
+        if not default_search_types:
+            default_search_types = all_search_types
+        selected_search_type = st.multiselect("Search Type", all_search_types, default=default_search_types)
 
         # 3. Violation Type 筛选
         all_violation_types = list(set([
@@ -103,17 +165,35 @@ with st.sidebar:
         # 移除空值并排序
         all_violation_types = sorted([vt for vt in all_violation_types if vt and vt != 'None'])
         all_violation_types = ["All"] + all_violation_types
-        selected_violation_type = st.selectbox("Violation Type", all_violation_types)
+        default_violation_type = saved_filter.get('selected_violation_type', 'All')
+        default_vt_index = all_violation_types.index(default_violation_type) if default_violation_type in all_violation_types else 0
+        selected_violation_type = st.selectbox("Violation Type", all_violation_types, index=default_vt_index)
 
         # 4. ID 范围筛选
         total_count = len(st.session_state.data)
         if total_count > 0:
-            id_range = st.slider("Item ID 范围", 1, total_count, (1, total_count))
+            default_id_range = saved_filter.get('id_range', (1, total_count))
+            # 确保范围有效
+            default_id_range = (
+                max(1, min(default_id_range[0], total_count)),
+                max(1, min(default_id_range[1], total_count))
+            )
+            id_range = st.slider("Item ID 范围", 1, total_count, default_id_range)
         else:
             id_range = (0, 0)
 
         # 5. 每页显示数量
-        items_per_page = st.slider("每页条数", 5, 50, 10)
+        default_items_per_page = saved_filter.get('items_per_page', 10)
+        items_per_page = st.slider("每页条数", 5, 50, default_items_per_page)
+
+        # 更新filter_state以便保存
+        st.session_state.filter_state = {
+            'selected_status': selected_status,
+            'selected_search_type': selected_search_type,
+            'selected_violation_type': selected_violation_type,
+            'id_range': id_range,
+            'items_per_page': items_per_page
+        }
         
         st.divider()
         st.header("💾 结果导出")
@@ -181,7 +261,12 @@ else:
         # 在侧边栏增加页码选择，或者在底部
         with st.sidebar:
             st.markdown(f"**筛选结果:** {len(filtered_data)} 条数据，共 {total_pages} 页")
-            current_page = st.number_input("页码", min_value=1, max_value=total_pages, value=1)
+            default_page = st.session_state.filter_state.get('current_page', 1)
+            # 确保页码在有效范围内
+            default_page = max(1, min(default_page, total_pages))
+            current_page = st.number_input("页码", min_value=1, max_value=total_pages, value=default_page)
+            # 保存当前页码
+            st.session_state.filter_state['current_page'] = current_page
         
         start_idx = (current_page - 1) * items_per_page
         end_idx = min(start_idx + items_per_page, len(filtered_data))
