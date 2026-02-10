@@ -164,7 +164,7 @@ with st.sidebar:
         saved_filter = st.session_state.filter_state
 
         # 1. 标注状态筛选
-        status_options = ["All", "unlabeled", "pos", "neg", "disable"]
+        status_options = ["All", "unlabeled", "pos", "neg", "disable", "review"]
         default_status_index = status_options.index(saved_filter.get('selected_status', 'All')) if saved_filter.get('selected_status') in status_options else 0
         selected_status = st.selectbox("标注状态 (Label Status)", status_options, index=default_status_index)
 
@@ -262,12 +262,14 @@ else:
     pos_count = sum(1 for item in st.session_state.data if item['label'] == 'pos')
     neg_count = sum(1 for item in st.session_state.data if item['label'] == 'neg')
     disable_count = sum(1 for item in st.session_state.data if item['label'] == 'disable')
-    
-    col1, col2, col3, col4 = st.columns(4)
+    review_count = sum(1 for item in st.session_state.data if item['label'] == 'review')
+
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("总样本", total_samples)
     col2.metric("✅ Pos", pos_count)
     col3.metric("❌ Neg", neg_count)
     col4.metric("🚫 Disable", disable_count)
+    col5.metric("🔍 Review", review_count)
     
     st.divider()
 
@@ -373,7 +375,7 @@ else:
 
                         # 显示当前状态的徽章
                         status_color = {
-                            "pos": "green", "neg": "red", "disable": "gray", "unlabeled": "blue"
+                            "pos": "green", "neg": "red", "disable": "gray", "unlabeled": "blue", "review": "orange"
                         }
                         color = status_color.get(item['label'], "blue")
                         st.markdown(f"当前状态: :{color}[**{item['label'].upper()}**]")
@@ -389,5 +391,8 @@ else:
 
                     if st.button("🚫 Disable", key=f"btn_dis_{real_index}"):
                         update_label(real_index, "disable")
+
+                    if st.button("🔍 Review", key=f"btn_review_{real_index}"):
+                        update_label(real_index, "review")
 
                 st.divider()
