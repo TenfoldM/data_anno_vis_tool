@@ -243,7 +243,8 @@ else:
         if selected_status != "All" and item['label'] != selected_status:
             continue
         # Search Type 过滤
-        if item.get('search_type') not in selected_search_type:
+        item_search_type = item.get('search_type', 'Unknown')
+        if item_search_type not in selected_search_type:
             continue
         # Violation Type 过滤
         if selected_violation_type != "All":
