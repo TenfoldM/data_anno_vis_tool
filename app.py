@@ -361,7 +361,7 @@ else:
                                         if edited_violation_type != current_violation_type:
                                             update_gemini_violation_type(real_index, edited_violation_type)
                             if gemini_result.get('reason'):
-                                with st.expander("🤖 Gemini Reason (可编辑)", expanded=False):
+                                with st.expander("🤖 Gemini Reason (可编辑)", expanded=True):
                                     current_reason = gemini_result.get('reason', '')
                                     edited_reason = st.text_area(
                                         "编辑原因:",
